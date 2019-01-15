@@ -96,7 +96,7 @@ namespace NAudio.Wave
         private void OpenWaveInDevice()
         {
             CloseWaveInDevice();
-            MmResult result = WaveInterop.waveInOpenWindow(out waveInHandle, (IntPtr)DeviceNumber, WaveFormat, 
+            MmResult result = WaveInterop.waveInOpenWindow(out waveInHandle, (IntPtr)DeviceNumber, WaveFormat,
                 callbackEvent.SafeWaitHandle.DangerousGetHandle(), IntPtr.Zero, WaveInterop.WaveInOutOpenFlags.CallbackEvent);
             MmException.Try(result, "waveInOpen");
             CreateBuffers();
@@ -108,7 +108,7 @@ namespace NAudio.Wave
         public void StartRecording()
         {
             if (captureState != CaptureState.Stopped)
-                throw new InvalidOperationException("Already recording"); 
+                throw new InvalidOperationException("Already recording");
             OpenWaveInDevice();
             MmException.Try(WaveInterop.waveInStart(waveInHandle), "waveInStart");
             captureState = CaptureState.Starting;
@@ -152,7 +152,11 @@ namespace NAudio.Wave
                     {
                         if (buffer.Done)
                         {
-                            DataAvailable?.Invoke(this, new WaveInEventArgs(buffer.Data, buffer.BytesRecorded));
+                            if (buffer.BytesRecorded > 0)
+                            {
+                                DataAvailable?.Invoke(this, new WaveInEventArgs(buffer.Data, buffer.BytesRecorded));
+                            }
+
                             if (captureState == CaptureState.Capturing)
                             {
                                 buffer.Reuse();
@@ -186,16 +190,37 @@ namespace NAudio.Wave
             if (captureState != CaptureState.Stopped)
             {
                 captureState = CaptureState.Stopping;
-                callbackEvent.Set(); // signal the thread to exit
                 MmException.Try(WaveInterop.waveInStop(waveInHandle), "waveInStop");
+
+                //Reset, triggering the buffers to be returned
+                MmException.Try(WaveInterop.waveInReset(waveInHandle), "waveInReset");
+
+                callbackEvent.Set(); // signal the thread to exit
             }
+        }
+
+        /// <summary>
+        /// Gets the current position in bytes from the wave input device.
+        /// it calls directly into waveInGetPosition)
+        /// </summary>
+        /// <returns>Position in bytes</returns>
+        public long GetPosition()
+        {
+            MmTime mmTime = new MmTime();
+            mmTime.wType = MmTime.TIME_BYTES; // request results in bytes, TODO: perhaps make this a little more flexible and support the other types?
+            MmException.Try(WaveInterop.waveInGetPosition(waveInHandle, out mmTime, Marshal.SizeOf(mmTime)), "waveInGetPosition");
+
+            if (mmTime.wType != MmTime.TIME_BYTES)
+                throw new Exception(string.Format("waveInGetPosition: wType -> Expected {0}, Received {1}", MmTime.TIME_BYTES, mmTime.wType));
+
+            return mmTime.cb;
         }
 
         /// <summary>
         /// WaveFormat we are recording in
         /// </summary>
         public WaveFormat WaveFormat { get; set; }
-        
+
         /// <summary>
         /// Dispose pattern
         /// </summary>
@@ -205,7 +230,7 @@ namespace NAudio.Wave
             {
                 if (captureState != CaptureState.Stopped)
                     StopRecording();
-                
+
                 CloseWaveInDevice();
             }
         }
